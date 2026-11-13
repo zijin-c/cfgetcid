@@ -15,6 +15,10 @@ sudo env REPO_URL=https://github.com/zijin-c/cfgetcid.git bash /tmp/cfgetcid-ins
 
 无需申请 API 凭据，安装后手动输入或粘贴 IID 即可查询。
 
+查询页面会合并重复输入，提示格式错误，并逐条显示确认 ID、失败原因和进度。支持停止后续查询、继续未完成项、只重试失败项、复制单条确认 ID 和成功结果。手机端以卡片形式显示结果。刷新页面不会保留当前批次，请先复制结果；已完成的服务器查询可在日志后台查看。
+
+请求至少间隔 2.1 秒，触发服务器限流时会按提示等待后重试。停止不会中断已发出的请求；当前请求完成后才停止，结果仍保存到日志。服务端的超时、网络连接失败、授权失败也会记录原因和耗时。
+
 默认访问 `http://服务器IP:9567`；日志后台为 `/logs`。需要在服务商安全组放行 TCP 9567，或配置域名反向代理。首次密码自动随机生成，通过下面命令查看 LOG_PASSWORD：
 
 ```bash
@@ -35,6 +39,8 @@ sudo cat /etc/cfgetcid/app.env
 
 环境文件为 KEY=value 格式，值外不要加引号。修改配置或监听端口后运行 `sudo cfgetcid apply-config`。普通 restart 不重新读取环境文件。
 
+安装或更新后，运行 `sudo cfgetcid` 即可进入中文维护菜单，无需记住下面的子命令。旧版用户先重新运行一次安装命令，才能使用新菜单。
+
 ```bash
 sudo cfgetcid status
 sudo cfgetcid logs
@@ -42,23 +48,22 @@ sudo cfgetcid stop
 sudo cfgetcid start
 sudo cfgetcid restart
 sudo cfgetcid apply-config
+sudo cfgetcid update
+sudo cfgetcid backup
+sudo cfgetcid reset-password
 ```
 
 服务开机启动，进程退出后自动重启。容器运行日志每份最多 10MB、保留三份；查询日志可在网页后台清空，不自动过期。
 
-再次运行安装命令即可更新，REPO_URL 必须与首次一致；自定义分支需每次传 BRANCH。先构建成功再停止旧容器，新容器未通过启动检查会恢复旧容器。配置和数据保留。源码有本地修改时脚本会停止，避免覆盖修改。
+菜单里的更新或 `cfgetcid update` 会先备份，再按首次安装时的仓库和分支拉取新版。再次运行安装命令也可更新，REPO_URL 必须与首次一致；自定义分支需每次传 BRANCH。先构建成功再停止旧容器，新容器未通过启动检查会恢复旧容器。配置和数据保留。源码有本地修改时脚本会停止，避免覆盖修改。
 
 第一次安装可在命令中添加 `HOST_PORT=端口`，或者 `BIND_IP=127.0.0.1` 仅本机访问。后续更改使用 deploy.env。
 
 ## 备份与密码恢复
 
-```bash
-sudo cfgetcid stop
-sudo tar -czf /root/cfgetcid-backup.tar.gz /etc/cfgetcid /var/lib/cfgetcid
-sudo cfgetcid start
-```
+使用菜单的“备份配置和查询日志”或 `sudo cfgetcid backup`。备份存放在 `/var/backups/cfgetcid`，包含配置、密码哈希和查询日志。备份时短暂停止服务，完成后会恢复原先运行状态；备份失败也会尝试恢复。建议定期将备份下载到其他设备。
 
-恢复时先停止服务，将备份恢复到原路径，再运行安装命令以校正容器用户的数据目录权限。忘记密码时，停止服务，将 /var/lib/cfgetcid/config.json 重命名留作备份，在 app.env 中设置新的至少 12 位 LOG_PASSWORD，再运行 apply-config。查询日志不受影响。
+恢复时先停止服务，将备份恢复到原路径，再运行安装命令以校正容器用户的数据目录权限。忘记密码时，在菜单选择“重置后台密码”，或执行 `sudo cfgetcid reset-password`，输入 RESET 确认后自动备份并生成新密码。查询日志保留，旧登录会话失效。
 
 ## 域名和 HTTPS
 
@@ -97,4 +102,6 @@ npm test
 
 外部接口或权限可能变化，部署脚本不能保证微软接口始终可用，需要有效 IID 和对应授权。
 
-自动测试模拟微软响应，覆盖查询、日志删除、后台改密和重启持久化，不执行真实激活。完整 Linux 安装和 Docker 容器运行需要在 VPS 验证。
+自动测试模拟微软响应，覆盖确认 ID 解析、HTTP 200 但无确认 ID、授权失败、超时、连接失败及其日志、后台改密和重启持久化，不执行真实激活。维护脚本可运行 `bash scripts/manager.test.sh`，使用替身检查备份和更新失败的恢复逻辑。完整 Linux 安装和 Docker 容器运行需要在 VPS 验证。
+
+本次没有增加微软账号登录、邮箱登录或登录后跳转。当前接口仍沿用原项目的调用方式；需要有效授权或人工验证时，会显示失败原因，无法保证接口始终可用。

@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>IID 确认 ID 工具</title>
+  <link rel="stylesheet" href="/assets/style.css">
+  <script defer src="/assets/app.js"></script>
+</head>
+<body>
+  <header><div><span class="eyebrow">IID / CID</span><h1>确认 ID 查询</h1><p>粘贴安装 ID，逐条查看查询结果。</p></div><a href="/logs" class="nav-link">日志后台 ↗</a></header>
+  <main>
+    <section class="card">
+      <label for="iids">安装 ID 列表</label>
+      <p class="hint">一行一条，支持 54 或 63 位数字、空格及短横线。重复项会自动合并。</p>
+      <textarea id="iids" rows="5" placeholder="在这里粘贴 IID，每行一条" spellcheck="false"></textarea>
+      <div class="actions"><button id="runBtn">开始查询</button><button id="stopBtn" class="secondary" disabled>停止后续查询</button><button id="retryBtn" class="secondary" disabled>重试失败项</button><button id="clearBtn" class="quiet">清空</button></div>
+      <p class="hint">为避免触发请求限制，每条请求至少间隔 2.1 秒。停止后，当前请求会完成并保留结果。</p>
+    </section>
+    <section class="card">
+      <div class="section-heading"><h2>查询结果</h2><div class="actions compact"><button id="copyBtn" class="secondary" disabled>复制成功结果</button><button id="jsonBtn" class="quiet" disabled>复制完整结果</button></div></div>
+      <div id="status" class="status" role="status" aria-live="polite">等待查询</div>
+      <progress id="progress" max="1" value="0" aria-label="查询进度"></progress>
+      <div class="table-wrap"><table><thead><tr><th>#</th><th>安装 ID</th><th>确认 ID</th><th>状态 / 说明</th><th>操作</th></tr></thead><tbody id="results"><tr class="empty"><td colspan="5">还没有查询结果</td></tr></tbody></table></div>
+      <p class="hint">成功表示接口返回了格式有效的确认 ID，最终激活结果以设备提示为准。</p>
+    </section>
+  </main>
+  <footer>仅用于合法授权设备激活 · 基于 <a href="https://github.com/wpyok168/cfgetcid" target="_blank" rel="noopener noreferrer">cfgetcid</a> 开源项目</footer>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <dialog id="detailDialog"><div class="section-heading"><h2 id="dialogTitle">查询详情</h2><button id="closeDialog" class="quiet">关闭</button></div><textarea id="detailText" readonly rows="16" aria-label="可复制内容"></textarea><p id="dialogHint" class="hint">可查看并手动复制原始返回内容。</p></dialog>
+</body>
+</html>

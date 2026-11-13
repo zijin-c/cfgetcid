@@ -4,6 +4,8 @@ WORKDIR /app
 COPY nodejs_ocr/package*.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY nodejs_ocr/server.js ./server.js
+COPY nodejs_ocr/activation.js ./activation.js
+COPY nodejs_ocr/public ./public
 RUN mkdir /app/data && chown node:node /app/data
 USER node
 EXPOSE 9567

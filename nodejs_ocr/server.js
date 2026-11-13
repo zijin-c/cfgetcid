@@ -3,6 +3,7 @@ const { rateLimit } = require('express-rate-limit');
 const fs = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
+const { normalizeActivation, networkFailure, storedResult } = require('./activation');
 
 const app = express();
 app.disable('x-powered-by');
@@ -19,6 +20,7 @@ app.use('/logs', (req, res, next) => {
 });
 app.use('/logs', rateLimit({ windowMs: 300000, limit: 30, skip: req => req.method !== 'POST' || req.path !== '/', message: { error: '登录尝试过多，请稍后重试' } }));
 app.post('/', rateLimit({ windowMs: 60000, limit: 30 }));
+app.use('/assets', express.static(path.join(__dirname, 'public'), { index: false, maxAge: 0 }));
 
 const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data'));
 const CONFIG_PATH = path.join(DATA_DIR, 'config.json');
@@ -117,7 +119,9 @@ function getClientIp(req) { return req.ip || 'unknown'; }
 
 // ====================== KV 存储 ======================
 async function writeLog(item) {
-  await fs.writeFile(path.join(KV_DIR, 'log_' + item.id + '.json'), JSON.stringify([item]), { mode: 0o600 });
+  const file = path.join(KV_DIR, 'log_' + item.id + '.json');
+  await fs.writeFile(file + '.tmp', JSON.stringify([item]), { mode: 0o600 });
+  await fs.rename(file + '.tmp', file);
 }
 
 async function getAllLogs() {
@@ -168,15 +172,15 @@ async function clearAllLogs() {
 
 // ====================== 页面 ======================
 function loginPage(msg = '') {
-  return `<!DOCTYPE html><meta charset="utf-8"><title>登录</title><style>body{display:grid;place-items:center;height:100vh;margin:0}.box{padding:24px;background:#fff;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,0.1);width:320px}input,button{width:100%;padding:10px;margin:8px 0;border-radius:6px;border:1px solid #ddd}button{background:#0066cc;color:white;border:none;cursor:pointer}.msg{color:green;text-align:center;margin:8px 0}.err{color:red}</style><div class="box"><h3>日志后台登录</h3>${msg ? `<div class="${msg.includes('成功') ? 'msg' : 'err'}">${escapeHtml(msg)}</div>` : ''}<form method="post"><input type="password" name="pwd" required placeholder="密码"><button>登录</button></form></div>`;
+  return `<!DOCTYPE html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>登录</title><style>body{display:grid;place-items:center;height:100vh;margin:0}.box{padding:24px;background:#fff;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,0.1);width:320px;box-sizing:border-box;max-width:calc(100vw - 32px)}input,button{width:100%;padding:10px;margin:8px 0;border-radius:6px;border:1px solid #ddd}button{background:#0066cc;color:white;border:none;cursor:pointer}.msg{color:green;text-align:center;margin:8px 0}.err{color:red}</style><div class="box"><h3>日志后台登录</h3>${msg ? `<div class="${msg.includes('成功') ? 'msg' : 'err'}">${escapeHtml(msg)}</div>` : ''}<form method="post"><input type="password" name="pwd" required placeholder="密码"><button>登录</button></form></div>`;
 }
 
 // 新增：修改密码页面
 function changePasswordPage(msg = '') {
-  return `<!DOCTYPE html><meta charset="utf-8"><title>修改登录密码</title>
+  return `<!DOCTYPE html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>修改登录密码</title>
 <style>
 body{display:grid;place-items:center;height:100vh;margin:0;background:#fafafa}
-.box{padding:24px;background:#fff;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,0.1);width:380px}
+.box{padding:24px;background:#fff;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,0.1);width:380px;box-sizing:border-box;max-width:calc(100vw - 32px)}
 input,button{width:100%;padding:10px;margin:8px 0;border-radius:6px;border:1px solid #ddd}
 button{background:#0066cc;color:white;border:none;cursor:pointer}
 .back{background:#6c757d;margin-top:10px}
@@ -204,7 +208,9 @@ function logPage(logs, page, totalPages, search) {
     <td>${escapeHtml(item.time)}</td>
     <td style="font-family:monospace">${escapeHtml(item.IID)}</td>
     <td>${escapeHtml(item.ip)}</td>
-    <td>${item.result?.success ? '✅成功' : '❌失败'}</td>
+    <td>${item.result?.success ? '✅成功' : '❌失败'}<div style="font-size:12px;margin-top:6px">${escapeHtml(item.result?.message)}</div></td>
+    <td style="font-family:monospace;word-break:break-all">${escapeHtml(item.result?.cid || '—')}</td>
+    <td>${Number.isFinite(item.durationMs) ? item.durationMs + ' ms' : '—'}</td>
     <td>
       <button onclick="del('${item.id}')" style="background:red;color:white;border:none;padding:4px 8px;border-radius:4px;cursor:pointer">删除</button>
       <button onclick="searchIID('${encodeURIComponent(item.IID || '')}')" style="background:#6c757d;color:white;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;margin:0 2px">同IID</button>
@@ -217,11 +223,11 @@ function logPage(logs, page, totalPages, search) {
     pages.push(`<a href="?page=${i}&search=${encodeURIComponent(search)}" style="margin:0 5px;color:${page === i ? 'red' : '#0066cc'}">${i}</a>`);
   }
 
-  return `<!DOCTYPE html><meta charset="utf-8"><title>IID 激活日志</title>
+  return `<!DOCTYPE html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>IID 激活日志</title>
 <style>
 body{margin:20px;font-family:system-ui;background:#fafafa}
 .card{background:white;padding:20px;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,0.1)}
-.bar{display:flex;gap:10px;margin:10px 0}
+.bar{display:flex;gap:10px;margin:10px 0;flex-wrap:wrap;align-items:center}
 input{flex:1;padding:8px;border-radius:6px;border:1px solid #ddd}
 button{padding:8px 12px;border:none;border-radius:6px;color:white;cursor:pointer}
 .red{background:red}
@@ -244,13 +250,15 @@ th,td{padding:10px;border:1px solid #eee}
     <input id="s" value="${escapeHtml(search)}" placeholder="搜索 IID">
     <button onclick="location.href='?search='+encodeURIComponent(document.getElementById('s').value)">搜索</button>
     <a href="/logs/change-password"><button style="background:#0066cc;color:white;border:none;padding:8px 12px;border-radius:6px;cursor:pointer">修改密码</button></a>
+    <a href="/">返回查询</a>
+    <form method="post" action="/logs/logout"><button style="background:#64748b">退出登录</button></form>
     <form method="post" action="/logs/clear" onsubmit="return confirm('确认清空全部日志？')"><button class="red">清空全部</button></form>
   </div>
   <div style="margin:10px 0">${pages.join('')}</div>
-  <table>
-    <tr><th>时间</th><th>IID</th><th>IP</th><th>状态</th><th>操作</th></tr>
+  <div style="overflow-x:auto"><table>
+    <tr><th>时间</th><th>IID</th><th>IP</th><th>状态 / 原因</th><th>确认 ID</th><th>耗时</th><th>操作</th></tr>
     ${rows}
-  </table>
+  </table></div>
 </div>
 <div id="detailModal"><div class="modal-content"><div class="modal-header"><h3>激活详情</h3><div class="btn-group"><button class="btn-close" onclick="closeDetailModal()">关闭</button><button class="btn-copy" onclick="copyDetailJson()">复制JSON</button></div></div><div id="detailContent"></div></div></div>
 <div class="toast" id="toast"></div>
@@ -263,112 +271,6 @@ function closeDetailModal(){ $('#detailModal').style.display='none'; }
 async function copyDetailJson(){ const txt=$('#detailContent').textContent; if(!txt){toast('暂无内容');return;} try{await navigator.clipboard.writeText(txt);toast('已复制');}catch{toast('复制失败');} }
 async function del(id){ if(!confirm('确认删除？'))return; await fetch('/logs/delete',{method:'POST',body:id}); location.reload(); }
 </script>`;
-}
-
-function toolPage() {
-  return `<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>IID 确认 ID 工具</title>
-<style>
-*{box-sizing:border-box;margin:0;padding:0;font-family:system-ui}
-body{background:#f0f7ff;padding:20px;max-width:800px;margin:0 auto}
-.card{background:#fff;border-radius:16px;box-shadow:0 8px 24px rgba(0,120,212,0.1);padding:24px;margin-bottom:20px}
-h1{font-size:20px;margin-bottom:16px;display:flex;align-items:center;gap:10px}
-img{width:22px;height:22px}
-label{font-weight:600;margin:8px 0;display:block}
-textarea{width:100%;padding:12px;border-radius:10px;border:1px solid #ddd;min-height:120px}
-button{padding:12px 16px;border-radius:10px;border:none;background:#0078d4;color:#fff;font-weight:600;cursor:pointer}
-.btn-gray{background:#64748b}
-.btn-red{background:#d93034}
-.btn-group{display:flex;gap:10px;margin:10px 0;flex-wrap:wrap}
-.result{background:#f8f9fa;padding:12px;border-radius:10px;white-space:pre-wrap;font-family:monospace;min-height:200px;max-height:400px;overflow:auto}
-.status{margin:10px 0;color:#059669}
-.toast{position:fixed;top:20px;left:50%;transform:translateX(-50%);background:#222;color:#fff;padding:10px 16px;border-radius:10px;opacity:0;transition:0.3s}
-.toast.show{opacity:1;top:30px}
-.footer{text-align:center;color:#666;font-size:14px;line-height:1.6;margin-top:24px}
-.footer a{color:#0078dc;text-decoration:none}
-</style>
-</head>
-<body>
-
-<div class="card">
-  <h1><img src="https://icons.duckduckgo.com/ip3/microsoft.com.ico"> IID 确认 ID 批量工具</h1>
-  
-  <label>IID 列表（一行一个）</label>
-  <textarea id="iids" placeholder="一行一个 IID，支持批量粘贴"></textarea>
-  <div class="btn-group">
-    <button id="runBtn">获取确认ID</button>
-    <button id="copyBtn" class="btn-gray">复制结果</button>
-    <button id="clearAllBtn" class="btn-red">清空</button>
-  </div>
-
-  <div class="status" id="status"></div>
-  <label>运行结果</label>
-  <div class="result" id="resultBox"></div>
-</div>
-
-<div class="footer">本工具后端服务器通过官方接口获取确认ID<br>仅用于合法授权设备激活<br><br><a href="/logs">日志后台管理</a><br><br>本页面使用<a href="https://github.com/wpyok168/cfgetcid" target="_blank">Github</a>开源项目进行部署，如果需要可以自行部署</div>
-<div class="toast" id="toast"></div>
-
-<script>
-const $ = s => document.querySelector(s);
-const toast = msg => { const t=$('#toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2000); };
-
-// 清空输入和结果
-$('#clearAllBtn').onclick = () => {
-  $('#iids').value = '';
-  $('#resultBox').textContent = '';
-  $('#status').textContent = '';
-  
-  toast('已清空全部内容');
-};
-
-// 复制结果
-$('#copyBtn').onclick = async () => {
-  const txt = $('#resultBox').textContent;
-  if (!txt) { toast('无内容可复制'); return; }
-  await navigator.clipboard.writeText(txt);
-  toast('已复制');
-};
-
-// 批量获取CID
-$('#runBtn').onclick = async () => {
-  const text = $('#iids').value;
-  const lines = text.split('\\n').map(i => i.trim().replace(/\\D/g, '')).filter(Boolean);
-  if (!lines.length) { toast('请输入 IID'); return; }
-  
-  const btn = $('#runBtn');
-  btn.disabled = true;
-  btn.textContent = '处理中...';
-  
-  const out = [];
-  for (const iid of lines) {
-    $('#status').textContent = '处理：' + iid;
-    try {
-      const r = await fetch('/', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ IID: iid })
-      });
-      const j = await r.json();
-      out.push(JSON.stringify(j, null, 2) + '\\n------------------------------------\\n');
-    } catch (e) {
-      out.push('请求失败\\n------------------------------------\\n');
-    }
-  }
-  
-  $('#resultBox').textContent = out.join('');
-  $('#status').textContent = '完成：' + lines.length + ' 条';
-  btn.disabled = false;
-  btn.textContent = '批量获取';
-  toast('完成');
-};
-
-</script>
-</body></html>`;
 }
 
 // ====================== 激活接口 ======================
@@ -392,7 +294,7 @@ async function sendActivationRequest(IID) {
       OverrideStatusCode: 'MUL', InitialReasonCode: '45164'
     })
   });
-  return { status: res.status, success: res.ok, data: await safeParse(res) };
+  return normalizeActivation(res.status, await safeParse(res));
 }
 
 // ====================== 路由 ======================
@@ -420,6 +322,8 @@ app.post('/logs/clear', async (req, res) => {
   res.redirect('/logs');
 });
 
+app.post('/logs/logout', (req, res) => res.clearCookie('log_token', { path: '/logs' }).redirect('/logs'));
+
 app.post('/logs/delete', async (req, res) => {
   if (!isAuth(req)) return res.sendStatus(403);
   
@@ -443,29 +347,29 @@ app.all('/logs', async (req, res) => {
   }
   if (!isAuth(req)) return res.send(loginPage(msg));
   const search = typeof req.query.search === 'string' ? req.query.search.slice(0, 100) : '';
-  const page = Math.max(1, parseInt(req.query.page) || 1);
-  const logs = await getAllLogs();
+  const requestedPage = Math.max(1, parseInt(req.query.page) || 1);
+  const logs = (await getAllLogs()).map(item => ({ ...item, result: storedResult(item.result) }));
   const filtered = search ? logs.filter(x => (x.IID || '').includes(search)) : logs;
-  const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const page = Math.min(requestedPage, totalPages);
   res.send(logPage(filtered, page, totalPages, search));
 });
 
 app.all('/', async (req, res) => {
-  if (req.method === 'GET') return res.send(toolPage());
+  if (req.method === 'GET') return res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  if (req.method !== 'POST') return res.sendStatus(405);
+  const IID = typeof req.body?.IID === 'string' ? req.body.IID.replace(/[\s-]/g, '') : '';
+  if (!/^(?:\d{54}|\d{63})$/.test(IID)) return res.status(400).json({ success: false, outcome: 'invalid_input', message: 'IID 必须为 54 或 63 位数字' });
+  const startedAt = Date.now();
+  let result;
   try {
-    const IID = typeof req.body?.IID === 'string' ? req.body.IID.replace(/[\s-]/g, '') : '';
-    if (!/^(?:\d{54}|\d{63})$/.test(IID)) return res.status(400).json({ error: 'IID 必须为 54 或 63 位数字' });
-    const ip = getClientIp(req);
-    const result = await sendActivationRequest(IID);
-    await writeLog({
-      id: crypto.randomUUID(),
-      time: getFormatTime(),
-      IID, ip, result
-    });
-    res.json(result);
+    result = await sendActivationRequest(IID);
   } catch (err) {
-    res.status(500).json({ error: 'error', detail: err + '' });
+    result = networkFailure(err);
   }
+  result.durationMs = Date.now() - startedAt;
+  await writeLog({ id: crypto.randomUUID(), time: getFormatTime(), IID, ip: getClientIp(req), durationMs: result.durationMs, result });
+  res.status(['network_error', 'timeout'].includes(result.outcome) ? result.status : 200).json(result);
 });
 
 app.get('/healthz', (req, res) => res.json({ status: 'ok' }));
