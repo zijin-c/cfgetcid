@@ -3,7 +3,6 @@ const { rateLimit } = require('express-rate-limit');
 const fs = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
-const multer = require('multer');
 
 const app = express();
 app.disable('x-powered-by');
@@ -19,7 +18,6 @@ app.use('/logs', (req, res, next) => {
   next();
 });
 app.use('/logs', rateLimit({ windowMs: 300000, limit: 30, skip: req => req.method !== 'POST' || req.path !== '/', message: { error: '登录尝试过多，请稍后重试' } }));
-app.use('/api', rateLimit({ windowMs: 60000, limit: 20 }));
 app.post('/', rateLimit({ windowMs: 60000, limit: 30 }));
 
 const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data'));
@@ -68,52 +66,6 @@ function isAuth(req) {
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 }
-const BAIDU_APP_ID = process.env.BAIDU_APP_ID;
-const BAIDU_API_KEY = process.env.BAIDU_API_KEY;
-const BAIDU_SECRET_KEY = process.env.BAIDU_SECRET_KEY;
-const ocrEnabled = Boolean(BAIDU_APP_ID && BAIDU_API_KEY && BAIDU_SECRET_KEY);
-let ocrToken;
-let tokenExpires = 0;
-async function getOcrToken() {
-  if (ocrToken && Date.now() < tokenExpires) return ocrToken;
-  const response = await fetch('https://aip.baidubce.com/oauth/2.0/token', {
-    method: 'POST', signal: AbortSignal.timeout(15000),
-    body: new URLSearchParams({ grant_type: 'client_credentials', client_id: BAIDU_API_KEY, client_secret: BAIDU_SECRET_KEY })
-  });
-  const result = await response.json();
-  if (!response.ok || !result.access_token) throw new Error('百度 OCR 鉴权失败，请检查 API_KEY 和 SECRET_KEY');
-  ocrToken = result.access_token;
-  tokenExpires = Date.now() + Math.max(0, Number(result.expires_in || 0) - 60) * 1000;
-  return ocrToken;
-}
-async function requestOcr(image, retry = true) {
-  const token = await getOcrToken();
-  const response = await fetch('https://aip.baidubce.com/rest/2.0/ocr/v1/accurate_basic?access_token=' + encodeURIComponent(token), {
-    method: 'POST', signal: AbortSignal.timeout(15000),
-    body: new URLSearchParams({ image })
-  });
-  const result = await response.json();
-  if (retry && [110, 111].includes(result.error_code)) {
-    ocrToken = null;
-    return requestOcr(image, false);
-  }
-  if (!response.ok || result.error_code) throw new Error('百度 OCR: ' + (result.error_msg || '服务返回错误'));
-  return result;
-}
-const upload = multer({
-  storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024, files: 1, fields: 0 },
-  fileFilter: (req, file, cb) => cb(null, ['image/png', 'image/jpeg', 'image/gif', 'image/bmp'].includes(file.mimetype))
-});
-function requireOcr(req, res, next) {
-  if (!ocrEnabled) return res.status(503).json({ error: '请先配置百度 OCR 的 APP_ID、API_KEY 和 SECRET_KEY' });
-  next();
-}
-async function recognize(req) {
-  if (!req.file) { const error = new Error('请上传 PNG、JPEG、GIF 或 BMP 图片'); error.status = 400; throw error; }
-  const result = await requestOcr(req.file.buffer.toString('base64'));
-  return result.words_result?.map(p => p.words).join('\n') || '';
-}
-
 function eI(t) {
   const e = t instanceof ArrayBuffer ? new Uint8Array(t) : new TextEncoder().encode(t);
   let n = '';
@@ -162,62 +114,6 @@ function getFormatTime(offset = TIMEZONE) {
   return new Date(Date.now() + offset * 3600000).toISOString().replace('T', ' ').slice(0, 19);
 }
 function getClientIp(req) { return req.ip || 'unknown'; }
-
-// ====================== IID 提取规则（修正：过滤无关数字，优先7位组→6位组） ======================
-function extractIIDs(text) {
-  const results = [];
-
-  // 新增：过滤无关数字（解决800/400电话号码、短数字误识别问题）
-  // 1. 过滤800/400开头的10位电话号码（如8008203800、4008203800）
-  let filteredText = text.replace(/\b(800|400)\d{1,7}\b/g, '');
-  // 2. 过滤非6位、非7位的短数字（如12345678，避免干扰IID提取）
-  filteredText = filteredText.replace(/\b\d{1,5}\b|\b\d{8,9}\b/g, '');
-
-  // 原有格式匹配（保留，基于过滤后文本匹配）
-  const pattern54 = /\b(?:\d{6}\s+){8}\d{6}\b/g;
-  const pattern63 = /\b(?:\d{7}\s+){8}\d{7}\b/g;
-
-  const m54 = filteredText.match(pattern54) || [];
-  const m63 = filteredText.match(pattern63) || [];
-
-  // 优先级1：先处理 63位（7位一组）IID
-  for (const s of m63) {
-    const c = s.replace(/\s+/g, '');
-    if (c.length === 63) results.push(c);
-  }
-
-  // 优先级2：再处理 54位（6位一组）IID
-  for (const s of m54) {
-    const c = s.replace(/\s+/g, '');
-    if (c.length === 54) results.push(c);
-  }
-
-  // 优先级3：纯数字长串（优先63位，再54位，基于过滤后文本）
-  const nums = filteredText.match(/\d{54,63}/g) || [];
-  // 先取63位
-  for (const n of nums) {
-    if (n.length === 63) {
-      results.push(n);
-    }
-  }
-  // 再取54位
-  for (const n of nums) {
-    if (n.length === 54) {
-      results.push(n);
-    }
-  }
-
-  // 优先级4：兜底（过滤后所有数字拼接，优先63位，再54位）
-  const allDigits = filteredText.replace(/\D/g, '');
-  if (allDigits.length >= 63) {
-    results.push(allDigits.slice(0, 63));
-  } else if (allDigits.length >= 54) {
-    results.push(allDigits.slice(0, 54));
-  }
-
-  // 去重，避免重复提取
-  return [...new Set(results)];
-}
 
 // ====================== KV 存储 ======================
 async function writeLog(item) {
@@ -394,8 +290,6 @@ button{padding:12px 16px;border-radius:10px;border:none;background:#0078d4;color
 .toast.show{opacity:1;top:30px}
 .footer{text-align:center;color:#666;font-size:14px;line-height:1.6;margin-top:24px}
 .footer a{color:#0078dc;text-decoration:none}
-.ocr-box{border:2px dashed #ccc;padding:20px;text-align:center;border-radius:10px;margin:10px 0}
-.preview{max-width:100%;max-height:200px;margin-top:10px;border-radius:8px;display:none}
 </style>
 </head>
 <body>
@@ -411,18 +305,6 @@ button{padding:12px 16px;border-radius:10px;border:none;background:#0078d4;color
     <button id="clearAllBtn" class="btn-red">清空</button>
   </div>
 
-  <label style="margin-top:20px">📷 图片 OCR 识别（粘贴/拖拽/选择）</label>
-  <div class="ocr-box" id="ocrBox">
-    点击选择 / 拖拽图片 / Ctrl+V 粘贴截图
-    <input type="file" id="imgFile" accept="image/*" hidden>
-    <button onclick="document.getElementById('imgFile').click()" style="margin-top:10px">选择图片</button>
-    <img id="preview" class="preview">
-  </div>
-  <div class="btn-group">
-    <button id="btnOcrIid">OCR识别并获取CID</button>
-    <button id="btnOcrOnly" class="btn-gray">仅OCR识别文字</button>
-  </div>
-
   <div class="status" id="status"></div>
   <label>运行结果</label>
   <div class="result" id="resultBox"></div>
@@ -435,19 +317,11 @@ button{padding:12px 16px;border-radius:10px;border:none;background:#0078d4;color
 const $ = s => document.querySelector(s);
 const toast = msg => { const t=$('#toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2000); };
 
-let currentFile = null;
-const preview = $('#preview');
-
-// 清空所有（含图片）
+// 清空输入和结果
 $('#clearAllBtn').onclick = () => {
   $('#iids').value = '';
   $('#resultBox').textContent = '';
   $('#status').textContent = '';
-  
-  // 清空图片
-  currentFile = null;
-  preview.src = '';
-  preview.style.display = 'none';
   
   toast('已清空全部内容');
 };
@@ -493,54 +367,6 @@ $('#runBtn').onclick = async () => {
   toast('完成');
 };
 
-// 粘贴图片
-document.addEventListener('paste', e => {
-  const f = e.clipboardData.files[0];
-  if (f) setFile(f);
-});
-
-// 拖拽
-['dragenter', 'dragover', 'dragleave', 'drop'].forEach(evt => {
-  $('#ocrBox').addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); });
-});
-$('#ocrBox').addEventListener('drop', e => setFile(e.dataTransfer.files[0]));
-
-// 选择图片
-$('#imgFile').onchange = e => setFile(e.target.files[0]);
-
-function setFile(f) {
-  if (!f) return;
-  if (!['image/png', 'image/jpeg', 'image/gif', 'image/bmp'].includes(f.type)) { toast('请选择 PNG、JPEG、GIF 或 BMP 图片'); return; }
-  if (f.size > 10 * 1024 * 1024) { toast('图片不能超过 10MB'); return; }
-  if (currentFile) URL.revokeObjectURL(preview.src);
-  currentFile = f;
-  preview.src = URL.createObjectURL(f);
-  preview.style.display = 'block';
-  toast('图片已加载');
-}
-
-async function runOcr(route) {
-  if (!currentFile) { toast('请选择图片'); return; }
-  const fd = new FormData();
-  fd.append('image', currentFile);
-  $('#btnOcrIid').disabled = $('#btnOcrOnly').disabled = true;
-  $('#status').textContent = 'OCR识别中...';
-  try {
-    const res = await fetch(route, { method: 'POST', body: fd });
-    const json = await res.json();
-    $('#resultBox').textContent = JSON.stringify(json, null, 2);
-    if (!res.ok || json.error) throw new Error(json.error || '识别失败');
-    $('#status').textContent = '完成';
-    toast('完成');
-  } catch (error) {
-    $('#status').textContent = error.message || '请求失败，请稍后重试';
-    toast('识别失败');
-  } finally {
-    $('#btnOcrIid').disabled = $('#btnOcrOnly').disabled = false;
-  }
-}
-$('#btnOcrIid').onclick = () => runOcr('/api/ocr-iid');
-$('#btnOcrOnly').onclick = () => runOcr('/api/ocr-only');
 </script>
 </body></html>`;
 }
@@ -568,31 +394,6 @@ async function sendActivationRequest(IID) {
   });
   return { status: res.status, success: res.ok, data: await safeParse(res) };
 }
-
-// ====================== OCR 接口 ======================
-app.post('/api/ocr-iid', requireOcr, upload.single('image'), async (req, res) => {
-  try {
-    const text = await recognize(req);
-    const iids = extractIIDs(text);
-    if (iids.length === 0) return res.json({ error: "未识别到IID", ocrText: text });
-    const first = iids[0];
-    const result = await sendActivationRequest(first);
-    // ✅ 修复：记录真实客户端IP
-    await writeLog({ id: crypto.randomUUID(), time: getFormatTime(), IID: first, ip: getClientIp(req), result });
-    return res.json(result);
-  } catch (e) {
-    res.status(e.status || 502).json({ error: e.message });
-  }
-});
-
-app.post('/api/ocr-only', requireOcr, upload.single('image'), async (req, res) => {
-  try {
-    const text = await recognize(req);
-    res.json({ ocrText: text });
-  } catch (e) {
-    res.status(e.status || 502).json({ error: e.message });
-  }
-});
 
 // ====================== 路由 ======================
 // 新增：修改密码路由（修改后强制退出重新登录）
@@ -667,14 +468,14 @@ app.all('/', async (req, res) => {
   }
 });
 
-app.get('/healthz', (req, res) => res.json({ status: 'ok', ocrEnabled }));
+app.get('/healthz', (req, res) => res.json({ status: 'ok' }));
 app.use((error, req, res, next) => {
   if (res.headersSent) return next(error);
-  res.status(error.code === 'LIMIT_FILE_SIZE' ? 413 : error.status || 500).json({ error: error.code === 'LIMIT_FILE_SIZE' ? '图片不能超过 10MB' : error.message });
+  res.status(error.status || 500).json({ error: error.message });
 });
 async function start() {
   await initConfig();
-  const server = app.listen(PORT, '0.0.0.0', () => console.log('服务已启动，端口 ' + server.address().port + '，OCR: ' + ocrEnabled));
+  const server = app.listen(PORT, '0.0.0.0', () => console.log('服务已启动，端口 ' + server.address().port));
   const stop = () => {
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(1), 35000).unref();
@@ -684,4 +485,4 @@ async function start() {
   return server;
 }
 if (require.main === module) start().catch(error => { console.error(error.message); process.exit(1); });
-module.exports = { app, start, extractIIDs };
+module.exports = { app, start };

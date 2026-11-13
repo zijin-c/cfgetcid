@@ -1,5 +1,5 @@
 {
-  "name": "iid-ocr-activator",
+  "name": "iid-vps-activator",
   "version": "1.0.0",
   "main": "server.js",
   "bin": "server.js",
@@ -9,8 +9,7 @@
   },
   "dependencies": {
     "express": "^5.3.0",
-    "express-rate-limit": "^8.7.4",
-    "multer": "^2.5.0"
+    "express-rate-limit": "^8.7.4"
   },
   "engines": {
     "node": ">=24"

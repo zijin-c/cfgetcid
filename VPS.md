@@ -1,10 +1,10 @@
-# VPS 一键部署（含 OCR）
+# VPS 一键部署
 
-适用于使用 systemd 的 Debian/Ubuntu VPS，需要 root 权限，以及能访问 GitHub、Docker Hub、npm、百度和微软接口的网络。脚本复用已有 Docker；没有 Docker 时通过系统仓库安装 docker.io。运行环境为容器内的 Node.js 24，不依赖 Cloudflare KV。
+适用于使用 systemd 的 Debian/Ubuntu VPS，需要 root 权限，以及能访问 GitHub、Docker Hub、npm 和微软接口的网络。脚本复用已有 Docker；没有 Docker 时通过系统仓库安装 docker.io。运行环境为容器内的 Node.js 24，不依赖 Cloudflare KV。
 
 ## 安装
 
-先将修改推送到自己的 GitHub 仓库，确保目标分支包含 install.sh、Dockerfile 和 nodejs_ocr/package-lock.json。在 VPS 上直接运行：
+在 VPS 上直接运行：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zijin-c/cfgetcid/main/install.sh -o /tmp/cfgetcid-install.sh
@@ -13,7 +13,7 @@ sudo env REPO_URL=https://github.com/zijin-c/cfgetcid.git bash /tmp/cfgetcid-ins
 
 若尚未安装 curl，先运行 `sudo apt-get update && sudo apt-get install -y curl`。分支不是 main 时，需同时修改下载地址，并在第二行添加 `BRANCH=分支名`。
 
-脚本会询问百度 APP_ID、API_KEY 和 SECRET_KEY，请使用已开通通用文字识别高精度版的应用。不填也能启动普通查询，OCR 会提示需要配置。额度和计费以百度账户设置为准。
+无需申请 API 凭据，安装后手动输入或粘贴 IID 即可查询。
 
 默认访问 `http://服务器IP:9567`；日志后台为 `/logs`。需要在服务商安全组放行 TCP 9567，或配置域名反向代理。首次密码自动随机生成，通过下面命令查看 LOG_PASSWORD：
 
@@ -21,19 +21,19 @@ sudo env REPO_URL=https://github.com/zijin-c/cfgetcid.git bash /tmp/cfgetcid-ins
 sudo cat /etc/cfgetcid/app.env
 ```
 
-网页修改密码后以新密码为准，重启和更新不会覆盖。此文件还含 OCR 凭据，请妥善保管。
+网页修改密码后以新密码为准，重启和更新不会覆盖。请妥善保管密码。
 
 ## 配置、管理与更新
 
 | 路径 | 用途 |
 | --- | --- |
 | /opt/cfgetcid | GitHub 源码，避免直接修改以免阻碍更新 |
-| /etc/cfgetcid/app.env | 首次密码、OCR 凭据、分页、时区和可信代理 |
+| /etc/cfgetcid/app.env | 首次密码、分页、时区和可信代理 |
 | /etc/cfgetcid/deploy.env | HOST_PORT 对外端口和 BIND_IP 监听地址 |
 | /var/lib/cfgetcid/config.json | 网页密码哈希 |
 | /var/lib/cfgetcid/kv_logs | 查询日志，请求完成前写入文件 |
 
-环境文件为 KEY=value 格式，值外不要加引号。修改 OCR 配置或监听端口后运行 `sudo cfgetcid apply-config`。普通 restart 不重新读取环境文件。
+环境文件为 KEY=value 格式，值外不要加引号。修改配置或监听端口后运行 `sudo cfgetcid apply-config`。普通 restart 不重新读取环境文件。
 
 ```bash
 sudo cfgetcid status
@@ -73,7 +73,7 @@ location / {
     proxy_set_header X-Forwarded-For $remote_addr;
     proxy_set_header X-Forwarded-Host $http_host;
     proxy_set_header X-Forwarded-Proto $scheme;
-    client_max_body_size 11m;
+    client_max_body_size 64k;
     proxy_read_timeout 90s;
 }
 ```
@@ -93,8 +93,8 @@ node --env-file=../.env server.js
 npm test
 ```
 
-默认数据目录 nodejs_ocr/data，可用 DATA_DIR 修改。图片最大 10MB。GET /healthz 返回状态和 OCR 是否已配置，不检测外部 API 连通性。
+默认数据目录 nodejs_ocr/data，可用 DATA_DIR 修改。GET /healthz 返回服务状态，不检测外部 API 连通性。
 
-OCR 通过百度 REST API 调用，格式参考[百度快速入门](https://ai.baidu.com/ai-doc/OCR/Pkrwx9ye4)。外部接口或权限可能变化，部署脚本不能保证微软接口始终可用，需要有效 IID 和对应授权。
+外部接口或权限可能变化，部署脚本不能保证微软接口始终可用，需要有效 IID 和对应授权。
 
-自动测试模拟百度和微软响应，覆盖查询、OCR、日志删除、后台改密和重启持久化，不消耗真实 OCR 配额，不执行真实激活。完整 Linux 安装和 Docker 容器运行需要在 VPS 验证。
+自动测试模拟微软响应，覆盖查询、日志删除、后台改密和重启持久化，不执行真实激活。完整 Linux 安装和 Docker 容器运行需要在 VPS 验证。

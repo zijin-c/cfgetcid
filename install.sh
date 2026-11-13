@@ -48,25 +48,9 @@ fi
 
 if [[ ! -f "$CONFIG_DIR/app.env" ]]; then
   password=$(openssl rand -hex 16)
-  app_id="${BAIDU_APP_ID:-}"
-  api_key="${BAIDU_API_KEY:-}"
-  secret_key="${BAIDU_SECRET_KEY:-}"
-  if [[ -r /dev/tty && -z "$app_id$api_key$secret_key" ]]; then
-    echo '填写百度智能云 OCR 凭据；直接回车可稍后配置。' >/dev/tty
-    read -r -p '百度 APP_ID: ' app_id </dev/tty
-    read -r -p '百度 API_KEY: ' api_key </dev/tty
-    read -r -s -p '百度 SECRET_KEY: ' secret_key </dev/tty
-    echo >/dev/tty
-  fi
-  for value in "$app_id" "$api_key" "$secret_key"; do
-    [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] || { echo '凭据不能包含换行。'; exit 1; }
-  done
   umask 077
   cat >"$CONFIG_DIR/app.env" <<EOF
 LOG_PASSWORD=$password
-BAIDU_APP_ID=$app_id
-BAIDU_API_KEY=$api_key
-BAIDU_SECRET_KEY=$secret_key
 PAGE_SIZE=20
 TIMEZONE_OFFSET=8
 TRUST_PROXY=
@@ -146,6 +130,6 @@ chmod 755 /usr/local/bin/cfgetcid
 /usr/local/bin/cfgetcid apply-config
 echo '安装完成。访问 http://服务器IP:端口，日志后台路径 /logs。'
 echo '首次后台密码见 /etc/cfgetcid/app.env 的 LOG_PASSWORD；网页修改后以新密码为准。'
-echo 'OCR 配置：编辑 /etc/cfgetcid/app.env，然后运行 cfgetcid apply-config。'
+echo '修改配置：编辑 /etc/cfgetcid/app.env，然后运行 cfgetcid apply-config。'
 echo '状态：cfgetcid status；运行日志：cfgetcid logs。'
 echo '请在 VPS 服务商安全组放行端口，或配置 HTTPS 反向代理。'
