@@ -1,0 +1,7 @@
+.git
+**/node_modules
+**/kv_logs
+**/data
+**/.env
+nodejs_ocr/config
+nodejs_ocr/config.json

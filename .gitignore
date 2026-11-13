@@ -1,0 +1,6 @@
+node_modules/
+.env
+data/
+kv_logs/
+nodejs_ocr/config.json
+*.log
